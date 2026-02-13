@@ -1,0 +1,143 @@
+Build a production-grade Hindi-first lexical search and crossword assistant web app.
+
+## Product name
+ShabdSetu (Hindi Word Intelligence Engine)
+
+## Core mission
+Maximize Hindi word coverage and return high-quality results for English/Hindi/Hinglish input.
+All output must be Hindi-first, with English second.
+
+## Tech stack
+- React + Vite + TypeScript
+- Tailwind CSS
+- Supabase (Postgres + RLS)
+- @supabase/supabase-js
+- Fuse.js for fuzzy matching
+- localStorage caching for fast repeat searches
+
+## UI requirements (premium, modern)
+- Clean typography with strong Hindi readability
+- Search bar at top with sticky behavior on desktop
+- Responsive cards with subtle shadows and smooth transitions
+- Tabs: Meaning | Synonyms | Antonyms | Related | Crossword Mode
+- Loading skeletons
+- Empty state with intelligent suggestions
+- Toasts for errors/retries
+- Modal for clicked synonym details
+
+## Input handling
+Accept:
+1) English
+2) Hindi (Devanagari)
+3) Hinglish (Roman Hindi)
+
+Build input pipeline:
+- Trim, lowercase, normalize spaces
+- Detect script (Devanagari vs Latin)
+- Generate transliteration candidates for Hinglish using deterministic rules
+- Fuzzy candidate expansion with Fuse.js over input_forms and transliteration
+- Prioritize exact match > transliteration match > fuzzy match
+
+## Supabase tables used
+- words(id, headword_hi, transliteration, pos, meaning_hi, meaning_en, input_forms, source, confidence, fetched_at, usage_count)
+- synonyms(id, word_id, synonym_hi)
+- antonyms(id, word_id, antonym_hi)
+- related_words(id, word_id, related_hi, similarity, reason)
+- search_logs(id, query, resolved_word_id, hit_type, created_at)
+
+## Search strategy (must implement exactly)
+Given query q:
+
+STEP A: Primary lookup
+- Exact match words.headword_hi = q
+- OR q in words.input_forms[]
+- OR q similar to transliteration/input_forms with Fuse threshold 0.25
+
+STEP B: If no high-confidence result:
+- Return top candidate matches from fuzzy search
+- Mark result confidence: High / Medium / Low
+
+STEP C: Fetch associated sections by word_id:
+- synonyms
+- antonyms
+- related_words (order by similarity desc)
+
+STEP D: Cache
+- Cache full response in localStorage with TTL = 24h
+- Increment usage_count in words
+- Insert into search_logs (db_hit / fuzzy_hit / no_hit)
+
+## Filters and sorting (must revise visible results immediately)
+Build a filter engine that always recomputes displayed list when any filter changes.
+
+### Synonym filters
+- Hindi alphabetical order (localeCompare hi-IN)
+- Hindi vowel order (अ आ इ ई उ ऊ ए ऐ ओ औ अं अः)
+- Length buckets:
+  - 2–3 chars
+  - 4 chars
+  - 5+ chars
+- Multi-word / hyphenated only
+- POS filter (if available)
+- Source confidence filter (high/medium/low)
+
+### Crossword filters (critical)
+- Exact letter count (2 to 15)
+- Starts with
+- Ends with
+- Contains letters
+- Pattern wildcard using underscore:
+  Example: क_ता_ matches 5-char words with fixed letters
+- Exclude letters option (advanced)
+- Result ranking:
+  exact pattern match > starts/ends match > similarity score > usage_count
+
+### Related words filters
+- Similarity range slider (0.0 to 1.0)
+- Domain tag (music/religion/nature/emotion/etc.) if metadata exists
+- Show grouped tiers:
+  Very close (>=0.85)
+  Related (0.65–0.84)
+  Loose (0.45–0.64)
+  Distant (<0.45)
+
+## Modal behavior
+On clicking any synonym:
+- Open sleek modal
+- Show Hindi meaning first
+- Show English meaning second
+- Show relation type (synonym/near-synonym/contextual)
+- Show quick actions: copy word, search this word
+
+## Performance requirements
+- Debounced search input: 250ms
+- Avoid duplicate DB calls for same query in same session
+- Memoize filtered/sorted lists
+- Fast first paint
+
+## Error handling
+- If Supabase fails, show graceful fallback from local mock dictionary
+- Display clear status badge: Database result / Fuzzy match / Fallback result
+
+## Accessibility
+- Keyboard navigation in result chips and modal
+- Enter to search
+- ESC to close modal
+- Visible focus rings
+
+## Deliverables
+1) Fully working app code
+2) Organized modules:
+   - lib/supabase.ts
+   - lib/searchPipeline.ts
+   - lib/filters.ts
+   - components/*
+3) Seed data loader utility for Supabase
+4) README with setup:
+   - env vars
+   - run steps
+   - deploy to Vercel
+
+## Non-negotiable behavior
+Whenever user changes any filter, visible results must update instantly and deterministically.
+No placeholder-only implementation. Implement full filter logic.
