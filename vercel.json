@@ -1,10 +1,14 @@
 {
   "version": 2,
   "buildCommand": "npm run build",
-  "builds": [
-    { "src": "dist/index.cjs", "use": "@vercel/node" }
-  ],
+  "functions": {
+    "api/index.ts": {
+      "runtime": "nodejs20.x"
+    }
+  },
   "routes": [
-    { "src": "/(.*)", "dest": "dist/index.cjs" }
+    { "src": "/api/(.*)", "dest": "/api/index.ts" },
+    { "src": "/(.*)", "dest": "/api/index.ts" }
   ]
 }
+
