@@ -1,0 +1,230 @@
+Refactor my app into a production-quality Hindi lexical search pipeline connected to Supabase.
+
+TECH
+- React + Vite + TypeScript
+- @supabase/supabase-js
+- Fuse.js for fuzzy matching
+- Tailwind UI already present
+
+ENV
+Use:
+- VITE_SUPABASE_URL
+- VITE_SUPABASE_ANON_KEY
+
+Create `src/lib/supabase.ts`:
+- initialize supabase client from env vars
+- throw friendly error if env missing
+
+SUPABASE TABLES (already exist)
+- words(id, headword_hi, transliteration, pos, meaning_hi, meaning_en, input_forms, source, confidence, fetched_at, usage_count, created_at)
+- synonyms(id, word_id, synonym_hi, created_at)
+- antonyms(id, word_id, antonym_hi, created_at)
+- related_words(id, word_id, related_hi, similarity, reason, created_at)
+- search_logs(id, query, resolved_word_id, hit_type, created_at) [optional table, handle gracefully if absent]
+
+==================================================
+1) BUILD SEARCH PIPELINE FILE
+==================================================
+Create `src/lib/searchPipeline.ts` with these exports:
+
+Types:
+- `WordRow`
+- `LookupResult`
+- `ConfidenceBand = 'high' | 'medium' | 'low'`
+- `HitType = 'db_exact' | 'db_input_form' | 'fuzzy' | 'no_hit' | 'fallback'`
+
+Functions:
+
+A) `normalizeQuery(q: string): string`
+- trim, lowercase, collapse spaces
+
+B) `isDevanagari(q: string): boolean`
+- detect using unicode range
+
+C) `generateHinglishCandidates(q: string): string[]`
+- deterministic candidate expansion (basic rules):
+  - aa->ा, ee->ी, oo->ू, ri->ृ approximations (simple)
+  - kh, gh, chh, th, dh, ph, bh clusters
+- return roman variants too (e.g., dholak, dholk)
+- keep this simple but functional
+
+D) `fetchByExactOrInputForms(query: string): Promise<WordRow[]>`
+- query words where:
+  - headword_hi ilike query
+  - OR transliteration ilike query
+  - OR input_forms contains query
+- implement robustly:
+  1) exact headword_hi eq query
+  2) eq transliteration lowercase form where possible
+  3) overlap/contains on input_forms (use `.contains('input_forms', [query])` first, then fallback)
+- return deduped rows by id
+
+E) `fetchWordRelations(wordId: string)`
+- fetch synonyms by word_id
+- fetch antonyms by word_id
+- fetch related_words by word_id ordered similarity desc
+- return arrays (empty if no rows)
+
+F) `scoreCandidates(query, rows): Array<{row, score}>`
+- scoring:
+  - exact headword match: +1.0
+  - exact input_form match: +0.9
+  - transliteration exact: +0.85
+  - startsWith match: +0.7
+  - includes match: +0.55
+- normalize to 0..1
+- sort desc
+
+G) `runFuzzyFallback(query: string): Promise<Array<{row: WordRow, score: number}>>`
+- fetch a broad candidate pool from words:
+  - select id, headword_hi, transliteration, input_forms, meaning_hi, meaning_en, pos, source, confidence, fetched_at, usage_count
+  - limit 1500 (or best feasible)
+- use Fuse.js keys:
+  - headword_hi (weight 0.45)
+  - transliteration (0.25)
+  - input_forms (0.30)
+- threshold 0.3
+- return top 100 scored candidates
+
+H) `confidenceBand(score: number): ConfidenceBand`
+- >=0.85 high
+- >=0.65 medium
+- else low
+
+I) `lookupWord(query: string): Promise<LookupResult>`
+Flow:
+1. normalize query; if empty return no_hit
+2. try exact/input_forms
+3. if rows found:
+   - score and pick top row
+   - fetch relations
+   - return hitType db_exact or db_input_form (based on why top matched)
+4. else run fuzzy fallback:
+   - if candidates found pick top
+   - fetch relations for top
+   - also return topCandidates (max 20) with confidence band for suggestion UI
+   - hitType fuzzy
+5. if nothing found:
+   - hitType no_hit with empty data
+6. never crash UI; convert Supabase errors to friendly messages
+
+J) `logSearch(query, resolvedWordId, hitType)`
+- best effort insert into search_logs
+- if table missing or insert fails, silently continue
+
+K) `incrementUsage(wordId)`
+- best effort: usage_count = usage_count + 1
+
+==================================================
+2) BUILD FILTER ENGINE FILE
+==================================================
+Create `src/lib/filters.ts` pure deterministic functions (no side effects):
+
+- `hindiAlphabeticalSort(words: string[]): string[]`
+  - localeCompare('hi-IN')
+
+- `hindiVowelOrderSort(words: string[]): string[]`
+  - order by initial vowel sequence:
+    अ, आ, इ, ई, उ, ऊ, ऋ, ए, ऐ, ओ, औ, अं, अः
+  - tie-breaker localeCompare hi-IN
+
+- `filterByLengthBucket(words: string[], bucket: 'all'|'2-3'|'4'|'5+'): string[]`
+  - count visible chars in Devanagari string
+
+- `filterMultiWordHyphen(words: string[], enabled: boolean): string[]`
+  - keep only words with space or '-'
+
+- `filterStartsWith(words: string[], prefix: string): string[]`
+- `filterEndsWith(words: string[], suffix: string): string[]`
+- `filterContains(words: string[], needle: string): string[]`
+
+- `patternToRegex(pattern: string): RegExp`
+  - underscore "_" means any single char
+  - escape regex special chars otherwise
+  - anchor ^$
+
+- `filterByPattern(words: string[], pattern: string): string[]`
+
+- `applyAllWordFilters(words: string[], opts): string[]`
+  opts includes:
+  {
+    sortMode: 'alpha-hi'|'vowel',
+    lengthBucket: 'all'|'2-3'|'4'|'5+',
+    multiWordOnly: boolean,
+    startsWith: string,
+    endsWith: string,
+    contains: string,
+    pattern: string
+  }
+Order:
+1) length
+2) multiWord
+3) startsWith
+4) endsWith
+5) contains
+6) pattern
+7) sort
+Return new array each time
+
+==================================================
+3) APP INTEGRATION (critical behavior)
+==================================================
+In main app:
+- debounce query input by 250ms
+- call `lookupWord(debouncedQuery)`
+- store result in state:
+  {
+    primaryWord,
+    synonyms,
+    antonyms,
+    relatedWords,
+    topCandidates,
+    hitType,
+    confidenceBand,
+    errorMessage
+  }
+
+- When filters change, recompute visible synonym list with `useMemo`:
+  dependencies MUST include:
+  [synonyms, sortMode, lengthBucket, multiWordOnly, startsWith, endsWith, contains, pattern]
+- Do not mutate arrays in place.
+- Render badges:
+  - db_exact => “Database result”
+  - db_input_form => “Input-form match”
+  - fuzzy => “Fuzzy match”
+  - no_hit => “No result”
+- If no primary result but topCandidates exist:
+  show clickable candidate list with confidence labels.
+  clicking candidate reruns lookup with candidate.headword_hi.
+
+==================================================
+4) CROSSWORD MODE
+==================================================
+Add UI controls:
+- exact length bucket (2-3,4,5+)
+- starts with
+- ends with
+- contains
+- pattern with underscore wildcard (e.g., क_ता_)
+These must alter visible synonym/related lists immediately.
+
+==================================================
+5) QUALITY GUARDS
+==================================================
+- Add TypeScript interfaces for DB rows and UI models.
+- Add try/catch around all Supabase calls.
+- If Supabase fails, show friendly message and fallback local mock data.
+- Keep Hindi-first labels in UI.
+- Ensure no undefined component references (e.g., Badge errors).
+- Ensure app compiles without TypeScript errors.
+
+==================================================
+6) ACCEPTANCE CHECKLIST
+==================================================
+Implement and verify:
+- Search “ढोलक” returns main card + relations
+- Search “dholak” matches via input_forms/transliteration
+- Search unknown term gives fuzzy suggestions
+- Changing filters instantly revises visible results
+- Pattern `क_ता_` filters deterministically
+- No runtime crashes
