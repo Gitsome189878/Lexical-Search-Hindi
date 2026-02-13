@@ -164,7 +164,7 @@ export async function runFuzzyFallback(query: string): Promise<Array<{ row: Word
     const { data: allWords, error } = await supabase
       .from('words')
       .select('*')
-      .limit(1500);
+      .limit(100); // Limit to 100 for performance optimization in fallback
 
     if (error) throw error;
     if (!allWords || allWords.length === 0) return getMockFallback(query);
@@ -205,6 +205,7 @@ function getMockFallback(query: string): Array<{ row: Word; score: number }> {
     { id: 1, headword_hi: "नमस्ते", transliteration: "namaste", pos: "interjection", meaning_hi: "अभिवादन", meaning_en: "Greeting", input_forms: ["namaste"], source: "mock", confidence: "high", usage_count: 100 },
     { id: 2, headword_hi: "प्रेम", transliteration: "prem", pos: "noun", meaning_hi: "प्यार", meaning_en: "Love", input_forms: ["prem"], source: "mock", confidence: "high", usage_count: 90 },
     { id: 3, headword_hi: "शांति", transliteration: "shanti", pos: "noun", meaning_hi: "सुकून", meaning_en: "Peace", input_forms: ["shanti"], source: "mock", confidence: "high", usage_count: 80 },
+    { id: 4, headword_hi: "ढोलक", transliteration: "dholak", pos: "noun", meaning_hi: "एक वाद्य यंत्र", meaning_en: "A two-headed hand drum", input_forms: ["dholak"], source: "mock", confidence: "high", usage_count: 50 },
   ];
   return scoreCandidates(query, mockWords);
 }

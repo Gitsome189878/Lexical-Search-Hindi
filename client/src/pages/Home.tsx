@@ -315,7 +315,16 @@ export default function Home() {
       <WordDetailModal 
         isOpen={!!selectedWordId} 
         onClose={() => setSelectedWordId(null)}
-        word={result?.primaryWord?.id === selectedWordId ? result.primaryWord as any : null}
+        word={
+          result?.primaryWord?.id === selectedWordId 
+            ? {
+                ...result.primaryWord,
+                synonyms: result.synonyms,
+                antonyms: result.antonyms,
+                relatedWords: result.relatedWords
+              } as any
+            : null
+        }
         isLoading={false}
       />
     </div>
